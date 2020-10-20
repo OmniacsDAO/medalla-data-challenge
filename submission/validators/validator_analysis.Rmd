@@ -1,0 +1,480 @@
+---
+title: "Proper Proposers and Skipped Slots: A Ranking and Segmentation Study of Validator Behavior"
+author: "Omni Analytics Group"
+date: "10/16/2020"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; The release of Ethereum 2.0 will mark the beginning of the largest scale proof-of-work to proof-of-stake migration in the crypto-ecosystem.  This transformation will render traditional mining infrastructure outmoded as network security and consensus is facilitated, no longer by miners, but holders of the cryptocurrency who stake a portion of their balances inside of wallets integrated into client node software that interact directly with the blockchain. These stakers will serve as validators, entities economically incentivized to propose and attest to the proper creation of blocks on the network. Prior analysis into the game theory of staking hypothesize that the pool of stakers on the Ethereum 2.0 network will be diverse, representing a heterogenous mix of institutions participating as validators all seeking to optimize their respective objectives. These may include exchanges seeking to leverage excess reserves, staking pools interested in increasing participation by incentivizing shared validator ownership, hobbyists interested in tinkering with the latest technology, among a host of other entities. The prevailing hypothesis is that, as validators actively fulfilling their duties, these network participants will have similar, yet discernable patterns in behavior and performance that will hold insight into the health of both the individual validators and the network as a whole. It is the goal of this analysis to establish a foundation for this understanding by examining and visualizing validator behavior using publicly available data from the Ethereum 2.0 Medalla testnet.
+
+
+## Definitions, Data and the Analysis Environment
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; To participate as a validator, Ethereum 1.0 holders will transfer 32 ETH into a deposit contract that creates an equivalent 32 bETH credit on Ethereum 2.0's Beacon Chain. This places the validator into an activation queue. Before blockchain activation there is an eligibility period where the queued validator must wait until the first epoch it is eligible to be activated.  At any point after the eligibility epoch has passed, the validator may complete the setup of the beacon chain client and join the network. Once online, the validator's activation epoch is logged and it may begin being assigned to propose blocks or participate in block attestations. For the validators who can no longer commit to their responsibilities, after a set duration of time, it is possible to exit the network. Beacon clients that exit have a time stamp logged of the epoch their client was disabled and when their funds are withdrawn. These validators have said to have completed their "journey", and for individual validators on the Medalla testnet, their journeys have been captured and characterized by the Beacon Scan block explorer, the source of the data utilized in this study. From the Genesis epoch until epoch 15082, our analysis tracked the behavior of 80,392 validators as they were assigned to slots, proposed blocks and participated in attestations for other block proposals.  
+
+The 11 variables provided from the Beacon Chain block explorer are:
+
+* `X1` - The row index of the validator.
+* `publickey` - The public key identifying the validator.
+* `index` - The index number of the validator.
+* `currentBalance` - The current balance, in ETH, of the validator.
+* `effectiveBalance` - The effective balance, in ETH, of the validator.
+* `proposed` - The number of blocks assigned, executed, and skipped by the validator.
+* `eligibilityEpoch` - The epoch number that the validator became eligible.
+* `activationEpoch` - The epoch number that the validator activated.
+* `exitEpoch` - The epoch number that the validator exited.
+* `withEpoch` - Epoch when the validator is eligible to withdraw their funds.  This field is not applicable if the validator has not exited.
+* `slashed` - Whether the given validator has been slashed.
+
+A sample of the raw data is shown below within the R analysis environment, the one leveraged to conduct this study.
+
+```{r}
+# Load libraries needed
+library(knitr)
+library(tidyverse)
+library(stringi)
+library(ggfortify)
+library(ggnewscale)
+library(skimr)
+```
+```{r}
+valid_raw <- read_csv("validator_data.csv")
+sample_n(valid_raw %>% as.data.frame, 5)
+```
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; To be suitable for analysis, this data required some minor data manipulation of its fields. This included the conversion of text columns to ASCII, the parsing and coercion of the current and effective balance columns into numeric variables, and the separation of the proposed column into three distinct fields for blocks assigned, executed, and skipped. Our analysis of validator behavior will take a top down approach where we will first focus on insights gathered at the network level before examining the behavior of individual nodes. With this at the forefront, we can produce our first analysis, a simple summary table of centrality and spread statistics of our collected features. 
+
+```{r, results='asis'}
+# Load the validator data and process the proposed column
+valid <- valid_raw %>%
+    select(-X1) %>%
+    mutate(proposed = stri_trans_general(proposed, "latin-ascii")) %>%
+    mutate(currentBalance = parse_number(currentBalance),
+           effectiveBalance = parse_number(effectiveBalance)) %>%
+    separate(proposed, into = c("assigned", "executed", "skipped"), sep = " ", extra = "merge") %>%
+    mutate(across(c(assigned, executed, skipped), parse_number))
+
+skim(valid)
+```
+
+
+## Validator Behavior at the Network-level
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Activation is the first step towards compliance for any node attempting to join the active validator set. By looking at the number of activated validators, as a function of the activation epoch, we observe that around 20,000 validators were activated during the genesis block and there has been a near constant growth rate of 4 validators per epoch since.
+
+```{r}
+# Get the number of activated validators over time
+valid %>%
+    mutate(activationEpoch = as.numeric(ifelse(activationEpoch == "genesis", 0, activationEpoch))) %>%
+    arrange(activationEpoch) %>%
+    group_by(activationEpoch) %>%
+    summarise(count = n()) %>%
+    ungroup() %>%
+    mutate(cume_count = cumsum(count)) %>%
+    ggplot(aes(x = activationEpoch, y = cume_count)) +
+    geom_point(size = 0.25) +
+    geom_line() +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    labs(
+        title = "Activated Validators over Time",
+        x = "Activation Epoch",
+        y = "Cumulative Number of Activated Validators"
+    )
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; A close inspection of the graph reveals two visible anomalies; one between Epoch 3238 and 3440, and the other, between 14189 and 14311. In both instances no new validators were activated on the blockchain for over 150 epochs which suggests there was some fault in the network's activation functionality. In the following figures we attempt to characterize the failure.  
+
+
+![Validator queue emptying out.](running_out.gif)
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;  The figure above shows the "Pending Count", the tracker of the validator queue decreasing towards zero as the "Active Count" inches up towards 32,887 active validators at which, at Epoch 3238 the entire queue has been activated. Subsequent epochs had no change in pending counts, active counts nor the total validator counts until Epoch 3294 when new validators began to appear in the queue. 
+
+![Validator queue rising.](val_pending.gif)
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Though validators appeared in the activation queue, they were not being activated as seen in the figure directly below. The breakdown of the activation functionality on the network can be clearly seen as the "Pending Count" queue is fixed at 1,700 between epochs 3350 and 3351.  From the original graph of activations, we know that functionality was restored near the 3440th epoch. This macro analysis into node activations should  highlight, with critical importance, the point that any attempts to characterize validator behavior must account for exogenous blockchain influences that may inhibit a node's ability to perform its network duties. Network failures, bugs in client software, or ambiguious configuration documentation are all factors influenctial to a validator's performance, but are well outside of their locus of control. 
+
+![Stagnant activations between blocks 3350 and 3351](stagnant_activations.png)
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; For validators attempting to leave the network, there is a mandatory lock-in period that is enforced. It is only after this time frame is a staker are allowed to withdraw their funds and leave the network. This process is a two step procedure where the node client software is first shut down and the bETH is withdrawn from the network. Specifically for the `r valid %>% filter(exitEpoch != "--") %>% nrow` validators that have exited, we observed the distribution of the time to exit to be about 362 hours or around 15.1 days.
+
+```{r}
+# Get the distribution of time to exit for validators
+valid %>%
+    mutate(activationEpoch = as.numeric(ifelse(activationEpoch == "genesis", 0, activationEpoch)),
+           exitEpoch = as.numeric(ifelse(exitEpoch == "genesis", 0, exitEpoch)),
+           timeToExit = 6.4 / 60 * (exitEpoch - activationEpoch)) %>%
+    arrange(timeToExit) %>%
+    ggplot(aes(x = timeToExit)) +
+    geom_histogram(fill = "#EA5600", colour = "grey60") +
+    scale_x_continuous(breaks = seq(0, 1500, by = 100)) +
+    labs(
+        title = "Distribution of Time to Exit for Validators",
+        x = "Time to Exit (Hours)"
+    )
+```
+
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; We can better observe these trends over time with both a traditional time series plot and a cumulative count graph that tracks the number of validators exiting throughout the epochs. Again, we see an interesting trend where a large number of nodes exited the network between the 3000th and 4000th epochs. Later we'll correlate this macro,network wide finding with specific behaviors exhibited by the individual  validators.
+
+```{r, out.width="45%", fig.show='hold'}
+exits <- valid %>%
+  mutate(exitEpoch = factor(exitEpoch, levels = 0:max(as.numeric(exitEpoch), na.rm = TRUE))) %>%
+  group_by(exitEpoch, .drop = FALSE) %>%
+  summarise(count = n()) %>%
+  filter(exitEpoch != "--") %>%
+  mutate(exitEpoch = as.numeric(exitEpoch)) %>%
+  arrange(exitEpoch) %>%
+  mutate(count_cume = cumsum(count))
+
+ggplot(data = exits, aes(x = exitEpoch, y = count)) +
+  geom_line() +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  labs(
+    title = "Exiting Validators by Epoch",
+    x = "Exit Epoch",
+    y = "Count"
+  )
+
+ggplot(data = exits, aes(x = exitEpoch, y = count_cume)) +
+  geom_line() +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  labs(
+    title = "Cumulative Exiting Validators by Epoch",
+    x = "Exit Epoch",
+    y = "Count"
+  )
+```
+
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; To initiate our investigation into the block proposal process, we plotted the distribution of the number of blocks assigned, successfully executed, and skipped across all validators in the dataset. It is immediately obvious that there are a substantial portion of validators that have executed no assignments, while in the most extreme counter cases, some have executed over a dozen.  
+
+```{r, fig.height=10}
+# Get the distributions of assigned, executed, and skipped.
+valid %>%
+    select(assigned, executed, skipped) %>%
+    gather(key = variable, value = value) %>%
+    group_by(variable, value) %>%
+    summarise(count = n()) %>%
+    ggplot(aes(x = value, y = count, fill = variable)) +
+    geom_bar(stat = "identity") +
+    scale_fill_brewer(palette = "Dark2") +
+    scale_x_continuous(breaks = seq(0, 35)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    facet_wrap(~variable, nrow = 3) +
+    labs(
+        title = "Distribution of Assigned, Executed, and Skipped Blocks"
+    ) +
+    theme(legend.position = "off")
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; From the barcharts above we observe that each validator status is distributed exponentially where most nodes have not had any assignments, executed blocks or skipped assignments. Globally however, the average validator has been assigned to 6 slots, has successfully proposed 4 blocks and has missed 2 slot assignments. By treating the exectutions and assignments skipped as proportions, we can visualize the distributions of both execution success and skipped slot as rates. To do so we define each variable by taking the number of executed or skipped blocks, and dividing them by the total number of assigned blocks.
+
+```{r, out.width="45%", fig.show='hold'}
+# Get the execution rate distribution
+valid %>%
+    mutate(`Execution Rate` = executed / assigned) %>%
+    ggplot(aes(x = `Execution Rate`)) +
+    geom_histogram(fill = "#EA5600") +
+    scale_y_continuous(labels = scales::comma, breaks = seq(0, 35000, by = 5000)) +
+    scale_x_continuous(labels = function(.) scales::percent(., accuracy = 1), breaks = seq(0, 1, by = .1)) +
+    labs(
+        title = "Distribution of Execution Rate for Validators"
+    )
+
+# Get the skipped rate distribution
+valid %>%
+    mutate(`Skipped Rate` = skipped / assigned) %>%
+    ggplot(aes(x = `Skipped Rate`)) +
+    geom_histogram(fill = "#776DB8") +
+    scale_y_continuous(labels = scales::comma, breaks = seq(0, 35000, by = 5000)) +
+    scale_x_continuous(labels = function(.) scales::percent(., accuracy = 1), breaks = seq(0, 1, by = .1)) +
+    labs(
+        title = "Distribution of Skipped Rate for Validators"
+    )
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Surprisingly, the rate of successful block executions and the proportion of skipped slots appear to follow reflected Beta distributions where most of the probability mass rests at the edges of the support range.  Most nodes have had only success executing on their block proposals; however a significant portion of the validators have not had any success. Likewise, most validators have not skipped any slot assignments, but a substantial portion of them have skipped all of their block proposals. This result suggests that there will likely be a clear demarcation between the behaviors of certain validators on the network.
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Slashing on the Ethereum 2.0 network is the act of punishing validators for violations of the consensus rules by either improperly proposing a block or failing to properly attest to a block while in an assigned committee.  To better understand the slashing behavior within our dataset, we investigated the number of slashed validators over time. From the graph below, we notice that between epochs 2000 and 4000, the slashed validators rose from 0 to 5000. Since epoch 4000, the growth has been much slower, barely creeping up towards 5500 through epoch 15000. The spike in slashings during epochs 2000 and 4000 correspond directly with the large exodus of validators that we observed previously. When punished with a slashing, a portion of the validators stake is removed.  If the effective balance of the validator drops too low, it could be subject to removal from the network. 
+
+```{r}
+# Get the number of slashed validators over time
+valid %>%
+    mutate(exitEpoch = as.numeric(ifelse(exitEpoch == "genesis", 0, exitEpoch))) %>%
+    group_by(exitEpoch) %>%
+    summarise(slashed = sum(slashed)) %>%
+    ungroup() %>%
+    mutate(cume_slashed = cumsum(slashed)) %>%
+    ggplot(aes(x = exitEpoch, y = cume_slashed)) +
+    geom_line() +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    labs(
+        title = "Number of Slashed Validators over Time",
+        x = "Exit Epoch",
+        y = "Cumulative Number of Slashed Validators"
+    )
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; From our macro analysis, we've shown that analytical techniques applied to Medalla's testnet data can help us develop a foundational understanding of the network. Our tracking of validator activations,  execution rates, and exit patterns, among other metrics, cast the first form an picture of network health as a whole that we can then recast and project onto individual validators. Our next section will further develop this idea as we focus specifically on understanding the actions of Ethereum 2.0's stakers. 
+
+## Behavioral based Validator Rankings
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; It is our goal at this junction to develop a categorization method that can codify patterns in validator behavior, characterize them and, lastly, provide a metric to discern the difference between constructive and destructive network actions. To facilitate the discovery of these behavioral patterns, and fulfill the aforementioned objectives, we will employ a weighted linear rank scoring algorithm. This simple, yet powerful sorting technique creates a mapping from a validator's characteristic vector onto a scalar ranked score that can then be used for ordered comparisons between nodes. As inputs into the scoring function, we'll use the current balance, number of successful executions, the active status of the validator, how long the node has been active, the number of skipped assignments and a binary indicator for whether the node has been slashed. For linear scoring functions to operate properly, the effect of each variable on performance must be well understood and parameterized as polarities. In this application, the polarities of each of our variables are unambiguous. Of the six, the only variables that directly indicate negative behavior are the number of skipped slots and whether the validator has been slashed. To account for this, we will set negative weightings on those two variables and allow the others to maintain their positive polarity.
+
+### Validator Ranking Procedure
+```{r}
+# Compute statistics for every validator
+valid_stats <- valid %>%
+    mutate(activationEpoch = as.numeric(ifelse(activationEpoch == "genesis", 0, activationEpoch)),
+           active = (exitEpoch == "--"),
+           exitEpoch = as.numeric(ifelse(exitEpoch == "genesis", 0, ifelse(exitEpoch == "--", 15579, exitEpoch))),
+           active_time = 6.2 / 60 * (exitEpoch - activationEpoch),
+           slashed = !slashed) %>%
+    mutate(executions = executed) %>%
+    mutate(skips = -1 * skipped) %>%
+    select(publickey, index, currentBalance, executions, skips, slashed, active, active_time)
+
+# Using the statistics, produce a ranking of each validator
+valid_ranks <- valid_stats %>%
+    mutate(across(c(currentBalance, executions, skips, slashed, active, active_time), rank, na.last = FALSE)) %>%
+    mutate(active_time = active_time / 4) %>% # Deweighting
+    gather(key = Variable, value = Rank, 2:ncol(.)) %>%
+    group_by(publickey) %>%
+    summarise(Score = sum(Rank)) %>%
+    mutate(Rank = rank(-1 * Score)) %>%
+    arrange(Rank)
+
+# Join back to the original statistics
+valid_all <- valid_stats %>% left_join(valid_ranks) %>%
+    mutate(slashed = !slashed, skips = -1 * skips) %>%
+    arrange(Rank)
+
+# Write out the validator ranking data as a CSV
+#write_csv(valid_all, "validator_ranks.csv")
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Here we will formalize our weighted linear rank scoring function. Let's first define our set of independent behavioral metrics:
+
+$x_1 =$ currentBalance
+$x_2 =$ executions
+$x_3 =$ skips
+$x_4 =$ slashed
+$x_5 =$ active
+$x_6 =$ active_time
+
+For any specific validator, the ordered rankings of its values on any variable, $x_i$, can be represented as $r_i$. We use weights, $w_i$, to correspond to emphasis placed on variable $x_i$ in the scoring function $S$.
+
+The weight vector shall satisfy the following constraint: $w_1+w_2+w_3+…+w_6 = 1$.
+
+The score, $S$, is then computed as the scalar product of the ranks and weights.
+
+$$S =\sum_{i=1}^6 w_ir_i $$
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Once implemented, performance scores were calculated for all 80,392 validators leveraging each of our behavioral metrics. Our most immediate objective is to visualize the scores to assess how effective they are at differentiating network actors. We begin first with a sorted dot plot, colored by gradients, to help highlight the differences in scores and the rate of change in ranked values.
+
+```{r}
+# Sort them and display in index order
+ggplot(valid_all %>% arrange(Score) %>% mutate(Index = 1:nrow(.)), aes(x = Index, y = Score, colour = Score)) +
+    geom_point() +
+    scale_colour_gradientn(colours = rainbow(2), labels = scales::comma) +
+    scale_x_continuous(name="Index",labels = scales::comma, breaks = scales::pretty_breaks(n = 10)) +
+    scale_y_continuous(labels = scales::comma, breaks = scales::pretty_breaks(n = 10),
+                       limits = c(0, 350000)) +
+    labs(
+        title = "Sorted Validator Scores"
+    )
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; While this validator score curve does show there is differentiation between the values, it fails to give any clear indication of heterogeneity within the node's behaviors. The graph does hint at this differentiation near its edges, particularly at the lower portion of scores where the steepness of the curve suggests there is a rather diverse set of scores among a small set of poor performing validators. This results may be intuitive, but is difficult to ascertain from this graph. A more appropriate visualization would be to plot the distribution of scores as a histogram. We do so below.
+
+```{r}
+# Check the distribution of scores
+n_bins <- length(ggplot2:::bin_breaks_width(range(valid_all$Score), width = 10000)$breaks) - 1L
+
+ggplot(valid_all, aes(x = Score, fill = Score)) +
+    geom_histogram(show.legend=FALSE,  binwidth=10000, colour = "grey60") +
+    scale_x_continuous(labels = scales::comma)+
+  labs(
+        title = "Distribution of Validator Performance Scores"
+    )
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; The multi-modal property of this histogram suggests there are several clusters of nodes co-existing within the same population. This is the first encouraging sign that our scoring function has successfully captured and encoded a meaningful portion of the variance in validator behavior.
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; As with many unsupervised tasks, the transition from scores to a finite segmentation is often tricky, particularly when there is no well established subject matter context for the selection of cut-offs, nor one agreed upon cluster validation method in the literature to appeal to. With a mixture of investigation, intuition and mathematical hand waving, we settled on the selection of seven score tiers to differentiate network behavior.
+
+
+```{r}
+# Get a matrix of the valid data
+mat_full <- valid_all %>% select(-Score, -Rank, -publickey, -index) %>% mutate(across(everything(), as.numeric)) %>% as.matrix
+
+
+# Create tiers of validators
+valid_tiers <- valid_all %>%
+    mutate(Tier = ifelse(Rank <= 2489, 1, ifelse(Rank <= 6942, 2, ifelse(Rank <= 38396, 3, ifelse(Rank <= 56534, 4, ifelse(Rank <= 67877, 5, ifelse(Rank <= 75644,6,7)))))))
+
+# Write out the validator ranking data as a CSV
+#write_csv(valid_tiers, "validator_tiers.csv")
+
+# Create a validator summary table
+valid_summary <- valid_tiers %>%
+    select(currentBalance, executions, skips, slashed, active, active_time, Score, publickey, Tier) %>%
+    gather(key = Variable, value = Value, 1:(ncol(.) - 2)) %>%
+    group_by(Tier, Variable) %>%
+    summarise(Value = mean(Value),
+              Count = length(unique(publickey))) %>%
+    spread(key = Variable, value = Value)
+
+```
+
+```{r}
+# Plot the tier cutoffs with the validator scores
+valid_summary2 <- valid_summary %>%
+    ungroup() %>%
+    select(Tier, Score) %>%
+    rbind(c(Tier = 8, Score = -Inf)) %>%
+    mutate(HighScore = c(Inf, head(Score, -1)))
+
+# Plot the tier cutoffs with the validator scores
+ggplot(valid_all %>% arrange(Score) %>% mutate(Index = 1:nrow(.)), aes(x = Index, y = Score)) +
+    geom_point() +
+    scale_colour_gradientn(colours = rainbow(8), labels = scales::comma) +
+    new_scale_color() +
+    geom_rect(data = valid_summary2, inherit.aes = FALSE, aes(xmin = -Inf, xmax = Inf, ymin = Score, ymax = HighScore, fill = factor(Tier)), alpha = 0.2, show.legend = FALSE) +
+    scale_fill_manual(values = rev(rainbow(8))) +
+    scale_x_continuous(labels = scales::comma, breaks = scales::pretty_breaks(n = 10)) +
+    scale_y_continuous(labels = scales::comma, breaks = scales::pretty_breaks(n = 10),
+                       limits = c(0, 400000)) +
+    labs(
+        title = "Sorted Validator Scores",
+        subtitle = "With tier-cutoffs illustrated"
+    )
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; With these cut-off ranges, we can apply them to our histogram of scores to create a stacked distribution and then reapply those same rules to partition the histogram along its tiers.
+
+```{r}
+# Check the distribution of scores with tiers
+ggplot(valid_tiers, aes(x = Score, fill = factor(Tier))) +
+    geom_histogram(colour = "grey60") +
+    scale_x_continuous(labels = scales::comma) +
+    scale_fill_manual("Tier", values = rev(rainbow(7)))+
+labs(
+        title = "Distribution of Validator Performance Scores Stacked by Tier"
+    )
+# Check the distribution of scores with tiers
+ggplot(valid_tiers, aes(x = Score, fill = factor(Tier))) +
+    geom_histogram(colour = "grey60") +
+    scale_x_continuous(labels = scales::comma) +
+    scale_fill_manual("Tier", values = rev(rainbow(7)))+
+labs(
+        title = "Distribution of Validator Performance Scores Partitioned by Tier"
+    )+ facet_wrap(vars(Tier))
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; After partitioning along the scoring thresholds, we established seven distinct scoring tiers. An investigation into validator performance can now begin on the tier level as a we compare how they each interact with the network. To categorize the behaviors of the tiers succinctly, we've listed the mean vectors for each in the table below. Globally, we see a clear monotonic relationship between higher score values and increasingly positive validator behavior. At the tier level, the highest scoring groups have more active validators, have not been slashed, haven't skipped a slot assignment, have maintained a consistent uptime and have bETH balances larger than 32, suggesting that they've been reaping the benefits of their good behavior.
+
+
+
+```{r, results='asis'}
+# View the table
+tier_means<-valid_summary %>% select(Tier, Count, `Time Active` = active_time, `Current Balance` = currentBalance,
+                         `Successful Blocks` = executions, `Skipped Blocks` = skips,
+                         `Proportion Slashed` = slashed, `Proportion Active` = active,
+                         Score)
+```
+
+![Heatmap of the tier averages.](tier_means.PNG)
+
+We will now, in plain English, describe the characteristic behaviors of each tier as a group and provide insight into the individual validators that comprise each.
+
+
+Tier 1 (Ranks 1-2489): Validators in this set can consider themselves “Proper Proposers” since they are the only nodes on the network with a perfect track record of no skipped slots and no slashings. They often have the highest number of successful blocks to go along with their longer than average active time on the network. Only 3% of validators can claim membership in this tier.
+
+Tier 2 (Ranks 2490 – 6942): Second tier validators are successful in their own right, having consistently executed their duties on behalf of the network, though with a slightly lower number of successful blocks. Only a small number have tallied their first skipped slot assignment. Overall, this group exhibits healthy behavior and represents about 6% of the validator population.
+
+Tier 3 (Ranks 6943 – 38396): While validators in this tier are still healthy overall, they do have more skipped blocks and slightly fewer successful block proposals. This group has a lower average active time than Tiers 1 and 2. It is in this cluster we observe the first set of inactive validators. Most of the validators on the network fall in this group, suggesting that its members exhibit the most typical validator behavior and perform average, at best.
+
+Tier 4 (Ranks 38397 – 56534): This is the tier where the prevalence of validators with more serious performance issues begins to rise. The majority of actors are active and have not been slashed, though there are some. This tier is unique because it also houses many of the newer validation nodes who are trying to move up the ranks, many of which have not even had their first assignment.
+
+Tier 5 (Ranks 56535– 67877): - Tier 5 is the first of the truly unhealthy groups where the the ratio of skipped blocks to successful proposals is skewed negatively towards missed assignments. In this tier, more validators have experienced a slashing and the number of inactive nodes continues to increase. 14% of the validators on the network exhibit these behaviors.
+
+Tier 6 (Ranks 67878 – 75644): Validators in this tier are arguably the most toxic, having skipped more block assignments than they have successfully proposed, yet have managed to be on and stay on the network for the longest period of time. These nodes are constantly in danger of being removed from the network due for carrying balances below the 32 ETH threshold. There are a significant number of validators that have been slashed that reside in this group as well. This block represents roughly 10% of the network and consists of either improperly configure nodes or bad actors that consistently skip blocks.
+
+Tier 7 (Ranks 75645 – 80392): The vast majority of validators in this bottom tier are inactive and have had their proposals slashed at least once. There are also a few that left due to an insufficient balance as a result of a disproportionate number of skipped blocks. This group has the lowest current balance and account for 6% of the network.
+
+
+```{r}
+# Get the prcomp data
+x <- prcomp(mat_full)$x %>%
+    as_tibble() %>%
+    mutate(Rank = valid_all$Rank,
+           Score = valid_all$Score)
+
+# Plot the two principle components
+#ggplot(data = x, aes(x = PC3, y = PC1, colour = Score)) +
+#    geom_point() +
+#    scale_colour_gradientn(colours = rainbow(7), labels = scales::comma)
+```
+
+```{r}
+valid_tiers %>%
+  mutate(Row = 1:nrow(.),
+         Index = index) %>%
+  mutate(Label = ifelse(Row %in% c( 80357, 78634, 21108, 62163, 71158, 15372, 4979, 304, 16418, 65418, 74210, 50116,39220), Index, NA)) %>%
+  select(Label, Index, Tier) %>%
+  cbind(x) %>%
+  ggplot(aes(x = PC3, y = PC1, colour = factor(Tier), label = Index)) +
+    geom_density_2d() +
+    geom_label(aes(label = Label), show.legend = FALSE) +
+    scale_colour_manual("Tier", values = rev(rainbow(7)))+
+  labs(
+        title = "Validator Performance Score Surface",
+        subtitle = "colored by tier assignment"
+    )
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Our tiers all possess distinct behavioral characteristics useful for discriminating between them; however, there is also a deeper level of heterogeneity that exists  within the tiers themselves.  This result can be found by applying a dimension reduction technique and plotting the component scores against one another as done above.  When labeled by tier, we get one such representation of the score surface.  Across the landscape, the scores within most tiers coalesce around one another, forming  localized regions.  Though this is true for some groups, Tiers 4 through 7 all have multiple regions where validator scores rest. This is an indication that there is further behavior to be distinguished between the nodes within the same segment.  Unfortunately, with over 80,000 nodes to analyze, we were unable to investigate them all.  However, we were able to highlight some validators within the data that possess representative characteristics and behaviors native to each localized regions.  These validators, their statistics, and indices are given in the table below.
+ 
+ 
+```{r}
+# valid_tiers %>%
+#     mutate(Row = 1:nrow(.)) %>%
+#     mutate(Label = ifelse(Row %in% c( 80357, 78634, 21108, 62163, 71158, 15372, 4979, 304, 16418, 65418, 74210, 50116,39220), Row, NA)) %>% filter(!is.na(Label)) %>% select(-Row,-Label) %>% 
+```
+
+![A representative sample of the most common validator profiles in table format.](sample_validators.PNG)
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; We end this analysis with an invitation to explore these validators on the BeaconScan block explorer directly. There you'll be able to retrieve statistics not currently included in our scoring, as well as, view the most recent snapshot of these nodes' behavior on the network. Will our "Proper Proposer" stay a saint or live long enough to become a Tier 6 villain.  Only time will tell.  
+
+## Conclusion
+
+Our key takeaway from this analysis is that, when performing our ranking procedure across the nearly dozen of variables and over 80,000 validators, true "tiers" of validators do in fact exist. At the top of the list, tier 1 validators execute 100% of their assignments, maintain a high effective balance, have not been slashed and have been active from very early on. On the bottom end are validators who were slashed, and failed to execute their assignments. Distributionally, as expected, most validators fall somewhere in between these two extremes. It will be quite interesting to see how the scores that make up the backbone of the tier-based ranking system evolve as time goes on.
+
+Among other interesting findings, we found:
+
+* Nearly every epoch, 4 validators are activated, except for two periods between Epoch 3238 and 3440, and the other, between 14189 and 14311
+* A large spike in exiting validators was observed between the 3000th and 4000th epoch.
+* The aforementioned spike corresponds to a large increase in the number of slashed validators
+* The average validator has been assigned 6 slots
+* The distribution of the execution and skipped rate follows flipped beta distributions.
+
+With only a couple months of data, we expect that these findings will continue to evolve, and as such, the tiers defining relative performance of validators will continue to need adjustment over time.
+
+## References
+
+* Medalla Data Challenge [https://ethereum.org/en/eth2/get-involved/medalla-data-challenge/]
+* Medalla Data Challenge Wishlist [https://www.notion.so/Wishlist-The-Eth2-Medalla-Data-Challenge-69fe10ffe83748bc87faa0e2586ba857]
+* Ethereum 2.0 Beacon Chain Explorer [beaconscan.com/]
+* Consensys Glossary of Ethereum 2.0 Terms [https://consensys.net/knowledge-base/ethereum-2/glossary/]
+* Breaking Down ETH 2.0 - Sharding Explained [https://academy.ivanontech.com/blog/breaking-down-eth-2-0-sharding-explained]
+* Rewards and Penalties on Ethereum 2.0 [Phase 0] [https://codefi.consensys.net/blog/rewards-and-penalties-on-ethereum-20-phase-0]
+* Ethereum 2.0 Explained | Part II | Phase 0 and the Beacon Chain [https://youtu.be/-qwSAFcicg8]
