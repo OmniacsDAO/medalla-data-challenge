@@ -7,7 +7,7 @@ Our submission for the 2020 Medalla Data Challenge
 - [#2: The Art of Slashing](https://crypto.omnianalytics.io/2020/10/19/slasher-analysis)
 
 
-[Learn about Eth 2.0 Validator Performance](https://crypto.omnianalytics.io/2020/10/20/what-makes-a-top-tier-validator)               | [Learn about "Slashings" on the Eth 2.0 Medalla Testnet](https://crypto.omnianalytics.io/2020/10/19/slasher-analysis)
+[Learn about Eth 2.0 Validator Performance](https://crypto.omnianalytics.io/2020/10/20/what-makes-a-top-tier-validator)               | [Learn about "Slashings" on the Medalla Testnet](https://crypto.omnianalytics.io/2020/10/19/slasher-analysis)
 :------------------------------------------------------:|:-------------------------:
 ![Validator Score Surface](images/score_surface.png)    |![Single Link Slashings](images/singlelink.gif)
 
