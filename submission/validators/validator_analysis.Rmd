@@ -244,6 +244,7 @@ valid_stats <- valid %>%
 
 # Using the statistics, produce a ranking of each validator
 valid_ranks <- valid_stats %>%
+    mutate(-index) %>%
     mutate(across(c(currentBalance, executions, skips, slashed, active, active_time), rank, na.last = FALSE)) %>%
     mutate(active_time = active_time / 4) %>% # Deweighting
     gather(key = Variable, value = Rank, 2:ncol(.)) %>%
