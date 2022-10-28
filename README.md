@@ -3,11 +3,11 @@ Our submission for the 2020 Medalla Data Challenge
 
 ## Submission Links
 
-- [#1: Proper Proposers and Skipped Slots: A Ranking and Segmentation Study of Validator Behavior](https://crypto.omnianalytics.io/2020/10/20/what-makes-a-top-tier-validator)
-- [#2: The Art of Slashing](https://crypto.omnianalytics.io/2020/10/19/slasher-analysis)
+- [#1: Proper Proposers and Skipped Slots: A Ranking and Segmentation Study of Validator Behavior](https://crypto.omnianalytics.org/2020/10/20/what-makes-a-top-tier-validator)
+- [#2: The Art of Slashing](https://crypto.omnianalytics.org/2020/10/19/slasher-analysis)
 
 
-[Learn about Eth 2.0 Validator Performance](https://crypto.omnianalytics.io/2020/10/20/what-makes-a-top-tier-validator)               | [Learn about "Slashings" on the Medalla Testnet](https://crypto.omnianalytics.io/2020/10/19/slasher-analysis)
+[Learn about Eth 2.0 Validator Performance](https://crypto.omnianalytics.org/2020/10/20/what-makes-a-top-tier-validator)               | [Learn about "Slashings" on the Medalla Testnet](https://crypto.omnianalytics.org/2020/10/19/slasher-analysis)
 :------------------------------------------------------:|:-------------------------:
 ![Validator Score Surface](images/performance_scores.png)    |![Single Link Slashings](images/singlelink.gif)
 
